@@ -1,0 +1,154 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Stack Completo da CandyBloow: Cria um S3 Bucket, uma Função Lambda e um S3 Object Lambda Access Point para anonimizar dados de vendas em tempo real.\n",
+    "Resources": {
+        "CandyBloowDataBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Sub": "candybloow-private-data-${AWS::AccountId}-${AWS::Region}"
+                },
+                "PublicAccessBlockConfiguration": {
+                    "BlockPublicAcls": true,
+                    "BlockPublicPolicy": true,
+                    "IgnorePublicAcls": true,
+                    "RestrictPublicBuckets": true
+                }
+            }
+        },
+        "CandyBloowBaseAccessPoint": {
+            "Type": "AWS::S3::AccessPoint",
+            "Properties": {
+                "Bucket": {
+                    "Ref": "CandyBloowDataBucket"
+                },
+                "Name": "candybloow-base-ap"
+            }
+        },
+        "LambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+                ],
+                "Policies": [
+                    {
+                        "PolicyName": "S3ObjectLambdaWriteAccess",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "s3-object-lambda:WriteGetObjectResponse",
+                                    "Resource": {
+                                        "Fn::Sub": "arn:aws:s3-object-lambda:${AWS::Region}:${AWS::AccountId}:accesspoint/candybloow-analytics-ap"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "CandyBloowAnonymizerFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "CandyBloow-Anonymizer",
+                "Runtime": "python3.11",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Handler": "index.lambda_handler",
+                "Timeout": 60,
+                "Code": {
+                    "ZipFile": "import boto3\nimport urllib3\nimport csv\nimport io\n\ns3 = boto3.client('s3')\nhttp = urllib3.PoolManager()\n\ndef lambda_handler(event, context):\n    print(\"Evento Recebido:\", event)\n\n    # 1. Obter detalhes do evento\n    object_context = event['getObjectContext']\n    input_s3_url = object_context['inputS3Url']\n    request_route = object_context['outputRoute']\n    request_token = object_context['outputToken']\n\n    try:\n        # 2. Baixar o objeto original da URL pré-assinada\n        response = http.request('GET', input_s3_url)\n        original_object_data = response.data.decode('utf-8')\n\n        # 3. Usar 'io' para tratar os dados de texto como arquivos CSV\n        f_in = io.StringIO(original_object_data)\n        f_out = io.StringIO()\n\n        reader = csv.reader(f_in)\n        writer = csv.writer(f_out)\n\n        # 4. Processar o CSV\n        header = next(reader)\n        writer.writerow(header)\n\n        try:\n            # Encontrar os índices das colunas que queremos anonimizar\n            name_index = header.index('CustomerName')\n            email_index = header.index('Email')\n        except ValueError:\n            # Se as colunas não existirem, apenas copia o resto\n            print(\"Colunas 'CustomerName' ou 'Email' não encontradas. Retornando dados originais.\")\n            writer.writerows(reader)\n        else:\n            # Substitui os dados em cada linha\n            print(\"Anonimizando colunas 'CustomerName' e 'Email'.\")\n            for row in reader:\n                row[name_index] = '[REDACTED]'\n                row[email_index] = '[REDACTED]'\n                writer.writerow(row)\n\n        transformed_object = f_out.getvalue()\n\n        # 5. Enviar a resposta transformada de volta\n        s3.write_get_object_response(\n            RequestRoute=request_route,\n            RequestToken=request_token,\n            Body=transformed_object\n        )\n        return {'status_code': 200}\n\n    except Exception as e:\n        print(f\"Erro durante a transformação: {e}\")\n        # Enviar uma resposta de erro se algo falhar\n        s3.write_get_object_response(\n            RequestRoute=request_route,\n            RequestToken=request_token,\n            StatusCode=500,\n            ErrorCode='TransformationFailed',\n            ErrorMessage=str(e)\n        )\n        return {'status_code': 500}\n"
+                }
+            }
+        },
+        "CandyBloowAnalyticsAccessPoint": {
+            "Type": "AWS::S3ObjectLambda::AccessPoint",
+            "Properties": {
+                "Name": "candybloow-analytics-ap",
+                "ObjectLambdaConfiguration": {
+                    "SupportingAccessPoint": {
+                        "Fn::GetAtt": [
+                            "CandyBloowBaseAccessPoint",
+                            "Arn"
+                        ]
+                    },
+                    "TransformationConfigurations": [
+                        {
+                            "Actions": [
+                                "GetObject"
+                            ],
+                            "ContentTransformation": {
+                                "AwsLambda": {
+                                    "FunctionArn": {
+                                        "Fn::GetAtt": [
+                                            "CandyBloowAnonymizerFunction",
+                                            "Arn"
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "DependsOn": [
+                "LambdaInvokePermission"
+            ]
+        },
+        "LambdaInvokePermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "Action": "lambda:InvokeFunction",
+                "FunctionName": {
+                    "Fn::GetAtt": [
+                        "CandyBloowAnonymizerFunction",
+                        "Arn"
+                    ]
+                },
+                "Principal": "s3-object-lambda.amazonaws.com",
+                "SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                },
+                "SourceArn": {
+                    "Fn::Sub": "arn:aws:s3-object-lambda:${AWS::Region}:${AWS::AccountId}:accesspoint/candybloow-analytics-ap"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "RawDataBucketName": {
+            "Description": "S3LojadeDoces.vendas",
+            "Value": {
+                "Ref": "CandyBloowDataBucket"
+            }
+        },
+        "S3ObjectLambdaArn": {
+            "Description": "ARN do Ponto de Acesso do S3 Object Lambda (use este para buscar os dados anonimizados)",
+            "Value": {
+                "Fn::GetAtt": [
+                    "CandyBloowAnalyticsAccessPoint",
+                    "Arn"
+                ]
+            }
+        }
+    }
+}
