@@ -5,7 +5,7 @@
 
 - ## Explicando o fluxo feito no CloudFormation (automatizado):
 
-### CandyBloowDataBucket (à direita)
+### CandyBloowDataBucket 
 - É o local onde os dados ficam armazenados.
 
 ### CandyBloowBaseAccessPoint
