@@ -1,7 +1,7 @@
 # Entrega-do-Projeto---Loja-de-Doces---Lambda-Function-e-S3
 
 ## Descrição:
-- Primeira Stack com AWS para simular um pedido numa livraria.
+- Usando Lambda Function com S3 para uma loja de Doces ficticia.
 
 ### CandyBloowDataBucket (à direita)
 - É o local onde os dados ficam armazenados.
