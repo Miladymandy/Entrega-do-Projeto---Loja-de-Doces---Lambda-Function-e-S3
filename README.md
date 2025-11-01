@@ -3,6 +3,8 @@
 ## Descrição:
 - Usando Lambda Function com S3 para uma loja de Doces ficticia.
 
+- ## Explicando o fluxo feito no CloudFormation (automatizado):
+
 ### CandyBloowDataBucket (à direita)
 - É o local onde os dados ficam armazenados.
 
