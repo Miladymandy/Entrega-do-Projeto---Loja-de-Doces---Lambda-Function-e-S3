@@ -1,0 +1,1 @@
+# Entrega-do-Projeto---Loja-de-Doces---Lambda-Function-e-S3
